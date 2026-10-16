@@ -1,70 +1,48 @@
 <div align="center">
 
-# Codebase Optimizer (代码库智能优化引擎)
+# ⚡ Codebase Optimizer (代码库优化引擎)
+### 面向 AI 编程智能体的 AST 级上下文压缩与反冗余代码审计引擎
 
-**专为 AI 编程智能体打造的 AST 驱动型上下文瘦身、克隆检测与零冗余架构引擎**
-
-[**English**](./README.md) | [**简体中文**](./README.zh-CN.md)
+**[English](README.md)** | **[简体中文](README.zh-CN.md)**
 
 </div>
 
 ---
 
-## 项目概述 (Overview)
+## 项目概述
 
-现代 AI 编程智能体（如 Claude Code、Gemini、Cursor、OpenCode）在快速生成代码方面表现卓越，但在跨会话、大规模工程迭代中普遍存在两大核心痛点：
+**Codebase Optimizer** 是一款专为现代 AI 编程智能体（如 **Claude Code**、**Gemini**、**Cursor**、**OpenCode**）打造的自主式抽象语法树（AST）静态分析引擎、MCP（Model Context Protocol）服务器及智能体技能（Agent Skill）。
 
-1. **上下文窗口膨胀 (输入低效)：** 智能体往往为了修改一个仅 25 行的函数而读取 1,500+ 行的完整源文件，导致 75%–90% 的 Token 预算被无关的实现细节和样板代码吞噬。
-2. **跨文件架构腐化 (输出冗余)：** 由于缺乏全局符号表记忆，AI 智能体极易在不同模块中重复编写逻辑相同的工具函数（代码克隆）、在重构后遗留无人调用的死导出（Dead Exports）、生成毫无意义的透传包装函数（Pass-Through Wrappers），并在依赖清单中堆积僵尸依赖。
+在大型代码库中，AI 编程智能体普遍面临两大核心痛点：
+1. **输入上下文膨胀（Context Bloat）：** 智能体为了修改单个函数，往往会读取上千行的完整源文件，导致 75%–90% 的 Token 浪费在无关的样板代码上，不仅增加延迟与成本，还会降低模型推理精度。
+2. **输出架构腐化（AI Slop / 代码冗余）：** 在多轮对话开发中，AI 极易在不同文件中重复编写逻辑相同的工具函数、遗留无人调用的废弃导出（Dead Exports）、生成空壳透传包装函数（Pass-through Wrappers）、在循环内编写串行 I/O 阻塞代码，以及引入未使用的幽灵依赖。
 
-**Codebase Optimizer** 集成了 **FastMCP 服务端**与**智能体行为准则技能 (Agent Skill)**。它通过确定性的抽象语法树（AST）静态分析技术，强制智能体在修改代码前执行“外科手术式”精准切片读取，并在提交前执行零冗余架构校验。
+`codebase-optimizer` 从 **AST（抽象语法树）** 底层同时解决这两个问题：**在输入端对上下文进行外科手术式的精准切片压缩，在输出端自动审计并清除代码库结构性冗余。**
 
 ---
 
-## 核心架构与功能模块
+## 四大核心架构引擎
 
-### 第一阶段：上下文瘦身与 AST 切片引擎 (`optimizer/ast_engine.py`)
-在完整保留类型签名与结构语义的前提下，将智能体的输入 Token 消耗降低 **70%–90%**。
-
-* **仓库骨架全貌图 (`get_repo_map`)：** 在不到 500 个 Token 内生成整个代码库的紧凑层级符号索引（`文件 -> 类 -> 公共方法 -> 顶层函数`），让智能体瞬间掌握项目全局架构。
-* **智能文件大纲提取 (`get_file_outline`)：** 剥离函数与方法的具体实现体，仅保留导入语句、装饰器、类继承关系、方法签名、类型注解、精确行号范围（如 `# L14-L52`）及首行文档字符串。
-* **传递依赖符号切片 (`get_symbol_slice`)：** 精准提取目标函数或类方法（如 `ClassName.method`），并**自动递归追踪**并提取该符号在当前模块内调用的所有辅助函数、常量与关联类，同时智能过滤出必需的顶层导入。
-* **Git Diff 降噪压缩 (`compress_git_diff`)：** 自动剔除 `package-lock.json`、`poetry.lock`、压缩产物、SVG 矢量代码以及冗长的未改动上下文行。
+### 第一阶段：上下文瘦身与 AST 切片引擎 (`optimizer/ast_engine.py`, `optimizer/context_pruner.py`)
+* **仓库骨架全息图 (`get_repo_map`)：** 在 500 Token 以内生成整个代码库的层级符号索引（`文件 -> 类 -> 公共方法`），相比直接读取源文件可节省 **85% 以上** 的上下文开销。
+* **智能文件大纲提取 (`get_file_outline`)：** 剥离函数具体实现体，仅保留导入语句、装饰器、类继承关系、方法签名、类型注解、行号范围（`# L12-L48`）及单行文档字符串。
+* **传递依赖符号切片 (`get_symbol_slice`)：** 精准提取目标函数或类方法（支持 `ClassName.method`），并自动追踪提取其在同一文件内调用的所有局部辅助函数、模块常量及按需过滤的顶部导入语句。
+* **Git Diff 降噪压缩 (`compress_git_diff`)：** 自动过滤 `package-lock.json`、`poetry.lock`、压缩产物等噪音文件，精简未改动上下文。
 
 ### 第二阶段：反 AI 冗余代码与克隆审计 (`optimizer/slop_auditor.py`)
-精准捕获单文件 Linter（如 `ruff`、`eslint`）无法识别的跨文件结构性腐化。
+* **AST 结构化克隆检测 (`find_duplicate_logic`)：** 对 AST 子树进行规范化归约（剥离变量名、参数名、注释及字面量常量）并计算 SHA-256 结构哈希。即使 AI 修改了变量名或注释，也能精准识别跨文件的重复函数逻辑。
+* **跨文件死代码追踪图 (`find_dead_exports`)：** 构建全仓符号定义与引用关系图，精准定位从未被外部文件或内部逻辑调用的公共函数与类（自动豁免路由装饰器与 `@mcp.tool` 入口函数）。
+* **无效透传包装器检测 (`find_useless_wrappers`)：** 识别仅包含单条 `return` 语句且原样转发参数的空壳包装函数，消除 AI 过度抽象。
 
-* **AST 结构化逻辑克隆检测 (`find_duplicate_logic`)：** 基于 `ASTNormalizer` 剥离文档字符串、变量名、参数名与字面量常量，对语法树子树进行归一化并计算 SHA-256 指纹，精准揪出跨文件的 Type-1 与 Type-2 重复逻辑函数。
-* **跨文件死导出猎手 (`find_dead_exports`)：** 构建全仓库符号定义与跨文件引用图谱，定位定义了但从未在其他文件中被导入或引用的公共函数与类（智能跳过入口文件与带有路由/工具装饰器的注册函数）。
-* **无效透传包装器检测 (`find_useless_wrappers`)：** 识别那些不进行任何数据转换、仅机械地将参数原样转发给底层函数的空壳包装函数。
+### 第三阶段：运行时性能瓶颈与复杂度扫描 (`optimizer/hotspot_scanner.py`)
+* **循环 I/O 与串行 `await` 热点检测 (`scan_loop_hotspots`)：** 深度遍历 `For`、`AsyncFor` 与 `While` AST 节点，精准拦截循环内的串行 `await` 调用（建议改为 `asyncio.gather`）、N+1 数据库查询、网络请求、文件读写以及重复的 `re.compile()`。
+* **认知与圈复杂度门禁 (`check_complexity`)：** 计算每个函数的圈复杂度（Cyclomatic Complexity）、嵌套加权认知复杂度（Cognitive Complexity）、最大嵌套深度及代码行数。
+* **重型顶部导入检测 (`find_heavy_imports`)：** 识别在模块顶部全局导入但完全未使用，或仅在单个冷门函数内部使用的重型库（如 `pandas`、`torch`、`playwright`、`PIL` 等），提示改为函数内延迟加载（Lazy Import）以提升启动速度。
 
-### 第三至第五阶段路线图 (持续构建中)
-* **第三阶段 — 运行时性能热点与复杂度扫描器：** 基于 AST 检测循环体内的同步/异步 I/O 调用（`await`、网络请求、数据库查询）、顶层重型依赖导入以及认知复杂度超标函数。
-* **第四阶段 — 依赖卫生审计与 0–100 健康度评分：** 比对 `requirements.txt` / `pyproject.toml` 与实际 AST 导入记录，清理僵尸依赖，并输出 0–100 分的代码库健康度评级（`A+` 至 `F`）。
-* **第五阶段 — 远程 GitHub 仓库直连审计与完整 Skill 规范包：** 支持通过 MCP 直接审计远程 GitHub 仓库，并提供开箱即用的 `SKILL.md` 智能体工程准则。
-
----
-
-## 实测基准：Token 压缩遥测输出
-
-第一阶段的所有工具均会在输出顶部自动附上确定性的 Token 节省遥测头：
-
-```python
-# [Token Diet] Raw: ~4,820 tokens -> Compressed: ~410 tokens (91.5% saved)
-
-# --- Imports ---
-import ast
-from typing import Dict, List, Optional
-
-class ASTSymbolEngine:
-    """Phase 1: Context Diet & AST Slicing Engine."""
-    @staticmethod
-    def estimate_tokens(text: str) -> int: ...  # L18-L22
-    @classmethod
-    def get_repo_map(cls, root_dir: str, max_files: int = 100) -> str: ...  # L32-L95
-    @classmethod
-    def get_outline(cls, code: str, include_stats: bool = True) -> str: ...  # L98-L168
-```
+### 第四阶段：依赖卫生审计与 0–100 健康度评分 (`optimizer/dependency_auditor.py`, `optimizer/health_scorer.py`)
+* **清单与 AST 导入交叉比对 (`audit_requirements`)：** 同时解析 `requirements.txt` 与 `pyproject.toml`，内置完整的 PyPI 包名与导入名映射字典（如 `PyGithub -> github`、`Pillow -> PIL`、`scikit-learn -> sklearn`、`beautifulsoup4 -> bs4`），精准识别幽灵依赖与未声明的第三方依赖。
+* **孤岛文件检测 (`find_orphan_files`)：** 识别既非入口脚本/测试文件，也从未被项目内任何模块导入的孤立 `.py` 文件。
+* **确定性 0–100 代码库健康度评分 (`calculate_health`)：** 汇总四大维度指标，计算加权的 **0–100 代码库健康度得分与等级（`A+` 至 `F`）**，并生成按优先级排序的修复清单。
 
 ---
 
@@ -74,72 +52,70 @@ class ASTSymbolEngine:
 codebase-optimizer/
 ├── optimizer/
 │   ├── __init__.py
-│   ├── ast_engine.py          # 第一阶段：仓库骨架图、签名大纲与传递依赖 AST 切片
-│   ├── context_pruner.py      # 第一阶段：Git Diff 降噪压缩与 Token 预算控制
-│   ├── slop_auditor.py        # 第二阶段：归一化 AST 克隆指纹、跨文件死导出与透传包装检测
-│   ├── dead_code.py           # 基础跨文件引用扫描器
-│   └── dependency_auditor.py  # 依赖声明文件与实际 AST 导入比对器
+│   ├── ast_engine.py          # 第一阶段：全仓骨架图、签名大纲提取与传递依赖 AST 切片
+│   ├── context_pruner.py      # 第一阶段：Git Diff 噪音与锁文件过滤压缩
+│   ├── slop_auditor.py        # 第二阶段：AST 规范化克隆哈希、死代码追踪图与空壳包装器检测
+│   ├── hotspot_scanner.py     # 第三阶段：循环 I/O 瓶颈、认知复杂度门禁与重型导入扫描
+│   ├── dependency_auditor.py  # 第四阶段：依赖清单交叉审计与孤岛模块检测
+│   └── health_scorer.py       # 第四阶段：0-100 代码库健康度评分与修复清单生成引擎
 ├── skill/
-│   └── SKILL.md               # 智能体技能定义与强制四步优化工作流
-├── mcp_server.py              # FastMCP 服务端（预配置免确认自动执行注解）
-├── requirements.txt
-├── README.md                  # 英文技术文档
-└── README.zh-CN.md            # 简体中文技术文档
+│   └── SKILL.md               # 可复用的 Agent Skill 智能体行为准则规范
+├── mcp_server.py              # 预配置免确认注解 (AUTO_RUN) 的 FastMCP 服务器
+├── README.md                  # 英文文档 (English Documentation)
+├── README.zh-CN.md            # 简体中文文档 (Simplified Chinese Documentation)
+└── requirements.txt
 ```
 
 ---
 
-## 快速开始 (Quickstart)
+## MCP 工具列表与智能体协议
+
+所有 MCP 工具均已配置 `readOnlyHint: True` 与 `destructiveHint: False` 注解，在支持该协议的客户端中可实现免弹窗自动执行。
+
+| 工具名称 | 阶段 | 功能描述 | 平均 Token 节省率 |
+| :--- | :---: | :--- | :---: |
+| `get_repo_map` | 1 | 生成带遥测统计的全仓 AST 符号骨架图。 | **85% – 94%** |
+| `get_file_outline` | 1 | 提取函数/类签名、类型注解、行号范围与文档摘要。 | **70% – 88%** |
+| `get_symbol_slice` | 1 | 提取目标符号及其文件内传递调用的辅助函数与导入。 | **75% – 92%** |
+| `compress_git_diff` | 1 | 剔除 Git 补丁中的锁文件与大段未修改上下文。 | **50% – 80%** |
+| `audit_ai_slop` | 2 | 执行 AST 克隆检测、死代码分析与空壳包装函数审计。 | 静态审计 |
+| `scan_runtime_hotspots` | 3 | 扫描循环内 I/O 阻塞、高复杂度函数与重型顶部导入。 | 静态审计 |
+| `audit_dependencies` | 4 | 检测未使用的幽灵依赖、未声明依赖及孤岛文件。 | 静态审计 |
+| `get_health_scorecard` | 4 | 计算 0–100 代码库健康度评分（`A+` 至 `F`）及修复清单。 | 综合报告 |
+
+---
+
+## 快速开始
 
 ### 1. 安装依赖
-
 ```bash
-gh repo clone KennethHelmuth/codebase-optimizer
+git clone git@github.com:KennethHelmuth/codebase-optimizer.git
 cd codebase-optimizer
 pip install -r requirements.txt
 ```
 
-### 2. 启动 MCP 服务端
+### 2. Python API 调用示例
+```python
+from optimizer import ASTSymbolEngine, SlopAuditor, HotspotScanner, HealthScorer
 
+# 1. 生成全仓极简符号骨架图（带 Token 压缩率统计）
+print(ASTSymbolEngine.get_repo_map("."))
+
+# 2. 提取单个方法及其文件内传递依赖切片
+with open("optimizer/ast_engine.py") as f:
+    code = f.read()
+print(ASTSymbolEngine.get_symbol_slice(code, "ASTSymbolEngine.get_symbol_slice"))
+
+# 3. 输出 0-100 代码库健康度评分报告与优先修复建议
+print(HealthScorer.format_health_report("."))
+```
+
+### 3. 启动 MCP 服务器
 ```bash
 python mcp_server.py
 ```
 
-所有 MCP 工具均已配置 `readOnlyHint: True` 与 `destructiveHint: False` 注解，在 Gemini Connectors 和 Claude Desktop 等客户端中可实现零弹窗无感调用。
-
-### 3. Python API 调用示例
-
-```python
-from optimizer import ASTSymbolEngine, SlopAuditor
-
-# 1. 生成低于 500 Token 的全仓库符号骨架图
-print(ASTSymbolEngine.get_repo_map("./my_project"))
-
-# 2. 提取特定方法及其在同文件内的传递依赖
-with open("./my_project/service.py") as f:
-    code = f.read()
-print(ASTSymbolEngine.get_symbol_slice(code, "PaymentProcessor.charge_card"))
-
-# 3. 执行完整的反 AI 冗余代码审计（重复逻辑、死导出、空壳包装函数）
-print(SlopAuditor.format_audit_report("./my_project"))
-```
-
 ---
 
-## MCP 工具列表
-
-| 工具名称 | 阶段 | 功能描述 |
-| :--- | :---: | :--- |
-| `get_repo_map` | 1 | 生成全仓库模块、类与公共函数的紧凑层级符号索引。 |
-| `get_file_outline` | 1 | 剥离函数实现体，返回方法签名、类型注解、行号范围与文档摘要。 |
-| `get_symbol_slice` | 1 | 提取单个目标符号及其在文件内的传递依赖项与精简导入。 |
-| `compress_git_diff` | 1 | 剔除 Git Diff 中的锁文件、静态构建产物及冗长未变动上下文。 |
-| `audit_ai_slop` | 2 | 执行 AST 结构化克隆检测、跨文件死导出扫描与空壳包装器审计。 |
-| `find_dead_exports` | 2 | 列出所有从未在定义文件外部被导入或引用的公共类与函数。 |
-| `audit_dependencies` | 4 | 比对 `requirements.txt` 与实际 AST 导入，精准标记僵尸依赖包。 |
-
----
-
-## 开源协议 (License)
-
-本项目基于 **MIT License** 开源。由 **Kenneth Helmuth** 设计与开发。
+## 开源协议
+MIT License © Kenneth Helmuth
