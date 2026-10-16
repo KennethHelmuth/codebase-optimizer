@@ -3,7 +3,7 @@
 # ⚡ Codebase Optimizer
 ### Surgical AST Context Compression & Anti-AI-Slop Engine for Coding Agents
 
-**[English](#overview)** | **[简体中文](#项目概述-chinese)** | **[Architecture](#system-architecture)** | **[MCP Tools](#mcp-tools--agent-protocol)**
+**[English](README.md)** | **[简体中文](README.zh-CN.md)**
 
 </div>
 
@@ -15,15 +15,15 @@
 
 Modern AI coding agents suffer from two compounding failure modes:
 1. **Input Context Bloating:** Agents read entire 1,500-line raw source files just to inspect a single function, wasting 75–90% of context tokens on unrelated boilerplate and degrading reasoning precision.
-2. **Output Architectural Rot ("AI Slop"):** Across multi-turn sessions, agents duplicate existing helper functions under different names, leave behind orphaned exports, create hollow pass-through wrapper functions, and introduce unreferenced dependencies.
+2. **Output Architectural Rot ("AI Slop"):** Across multi-turn sessions, agents duplicate existing helper functions under different names, leave behind orphaned exports, create hollow pass-through wrapper functions, introduce sequential loop I/O bottlenecks, and accumulate ghost dependencies.
 
 `codebase-optimizer` solves both problems at the Abstract Syntax Tree (AST) level—**compressing context going into the model, and eradicating structural bloat coming out.**
 
 ---
 
-## Core Pillars & Capabilities
+## Core Architecture & 4-Pillar Engine
 
-### Phase 1: Context Diet & AST Slicing Engine (`optimizer/ast_engine.py`)
+### Phase 1: Context Diet & AST Slicing (`optimizer/ast_engine.py`, `optimizer/context_pruner.py`)
 * **Compact Repository Skeleton (`get_repo_map`):** Indexes an entire repository into a hierarchical symbol map (`File -> Class -> Public Methods`) in under 500 tokens, achieving **85%+ token reduction** over raw file reads.
 * **Smart Signature Outliner (`get_file_outline`):** Strips function bodies while preserving imports, decorators, class inheritance, type annotations, line numbers (`# L12-L48`), and 1-line docstrings.
 * **Transitive Symbol Slicer (`get_symbol_slice`):** Extracts a target function or method (`ClassName.method`) **plus** all internal helper functions and module constants it transitively calls within the same file, along with filtered imports.
@@ -34,13 +34,19 @@ Modern AI coding agents suffer from two compounding failure modes:
 * **Cross-File Dead Export Graph (`find_dead_exports`):** Constructs a repository-wide symbol definition vs. reference graph to identify public functions and classes with zero external or internal callers (automatically exempting framework routes and `@mcp.tool` entrypoints).
 * **Pass-Through Wrapper Detector (`find_useless_wrappers`):** Identifies hollow single-statement wrapper functions that merely forward identical arguments to another function without transformation.
 
-### Phase 3–5 Roadmap (In Progress)
-* **Runtime Hotspot & Complexity Scanner:** Detects I/O or `await` calls inside sequential loops, heavy top-level imports, and high cognitive complexity.
-* **Zombie Dependency Reconciler & 0–100 Health Scorer:** Cross-checks manifests (`requirements.txt`, `pyproject.toml`) against actual AST imports and computes a unified **Codebase Health Grade (`A+` to `F`)**.
+### Phase 3: Runtime Bottleneck & Complexity Scanner (`optimizer/hotspot_scanner.py`)
+* **Loop I/O & Sequential `await` Detector (`scan_loop_hotspots`):** Walks `For`, `AsyncFor`, and `While` AST subtrees to flag sequential `await` calls (recommending `asyncio.gather`), N+1 database queries, network requests, filesystem I/O, and repeated `re.compile()` inside loops.
+* **Cognitive & Cyclomatic Complexity Gate (`check_complexity`):** Computes Cyclomatic Complexity, nesting-weighted Cognitive Complexity, maximum indentation depth, and line counts per function.
+* **Heavy Top-Level Import Detector (`find_heavy_imports`):** Identifies heavy libraries (`pandas`, `torch`, `playwright`, `PIL`, etc.) imported globally at module load time when they are unused or only used inside a single isolated function.
+
+### Phase 4: Dependency Hygiene & 0–100 Health Scorer (`optimizer/dependency_auditor.py`, `optimizer/health_scorer.py`)
+* **Manifest vs. AST Reconciler (`audit_requirements`):** Cross-checks both `requirements.txt` and `pyproject.toml` against actual AST imports using a built-in PyPI-to-import alias map (`PyGithub -> github`, `Pillow -> PIL`, `scikit-learn -> sklearn`, `beautifulsoup4 -> bs4`, etc.).
+* **Orphaned File Finder (`find_orphan_files`):** Detects `.py` modules that are neither entrypoints/tests nor imported by any other file in the repository.
+* **Deterministic 0–100 Health Scorer (`calculate_health`):** Aggregates all 4 pillars into a weighted **0–100 Codebase Health Score (`A+` to `F`)** with a prioritized remediation checklist.
 
 ---
 
-## System Architecture
+## Project Layout
 
 ```text
 codebase-optimizer/
@@ -49,11 +55,14 @@ codebase-optimizer/
 │   ├── ast_engine.py          # Phase 1: Repo skeleton map, signature outliner & transitive AST slicer
 │   ├── context_pruner.py      # Phase 1: Unified Git diff noise & lockfile compressor
 │   ├── slop_auditor.py        # Phase 2: Canonical AST clone hashing, dead export graph & wrapper detector
-│   ├── dead_code.py           # Legacy directory symbol scanner
-│   └── dependency_auditor.py  # Manifest vs. AST import reconciler
+│   ├── hotspot_scanner.py     # Phase 3: Loop I/O bottlenecks, cognitive complexity & heavy import scanner
+│   ├── dependency_auditor.py  # Phase 4: Manifest vs. AST import reconciler & orphan file detector
+│   └── health_scorer.py       # Phase 4: Unified 0-100 Codebase Health Scorecard engine
 ├── skill/
 │   └── SKILL.md               # Reusable Agent Skill behavioral specification
 ├── mcp_server.py              # FastMCP server with zero-prompt AUTO_RUN tool annotations
+├── README.md                  # English documentation
+├── README.zh-CN.md            # Simplified Chinese documentation
 └── requirements.txt
 ```
 
@@ -69,85 +78,44 @@ All MCP tools are annotated with `readOnlyHint: True` and `destructiveHint: Fals
 | `get_file_outline` | 1 | Extracts signatures, types, line numbers, and docstrings without bodies. | **70% – 88%** |
 | `get_symbol_slice` | 1 | Extracts a symbol + its transitive local helper dependencies & imports. | **75% – 92%** |
 | `compress_git_diff` | 1 | Strips lockfiles and unchanged boilerplate from Git patches. | **50% – 80%** |
-| `audit_ai_slop` | 2 | Runs AST clone detection, dead export analysis, and wrapper checks. | N/A (Audit) |
-| `find_dead_exports` | 2 | Lists public classes and functions with zero references across the repo. | N/A (Audit) |
-| `audit_dependencies` | 4 | Detects declared packages in `requirements.txt` never imported in code. | N/A (Audit) |
+| `audit_ai_slop` | 2 | Runs AST clone detection, dead export analysis, and wrapper checks. | Static Audit |
+| `scan_runtime_hotspots` | 3 | Detects loop I/O bottlenecks, complexity violations, and heavy imports. | Static Audit |
+| `audit_dependencies` | 4 | Detects ghost dependencies and orphaned files across the project. | Static Audit |
+| `get_health_scorecard` | 4 | Computes the 0–100 Codebase Health Score (`A+` to `F`) & action plan. | Executive Report |
 
 ---
 
-<br/>
+## Quickstart
 
-<div align="center">
-
-# ⚡ Codebase Optimizer (代码库优化引擎)
-### 面向 AI 编程智能体的 AST 级上下文压缩与反冗余代码审计引擎
-
-</div>
-
----
-
-## 项目概述 (Chinese)
-
-**Codebase Optimizer** 是一款专为现代 AI 编程智能体（如 **Claude Code**、**Gemini**、**Cursor**、**OpenCode**）打造的自主式抽象语法树（AST）静态分析引擎、MCP（Model Context Protocol）服务器及智能体技能（Agent Skill）。
-
-在大型代码库中，AI 编程智能体普遍面临两大核心痛点：
-1. **输入上下文膨胀（Context Bloat）：** 智能体为了修改一个函数，往往会读取上千行的完整源文件，导致 75%–90% 的 Token 浪费在无关的样板代码上，不仅增加延迟与成本，还会降低模型推理精度。
-2. **输出架构腐化（AI Slop / 代码冗余）：** 在多轮对话开发中，AI 极易在不同文件中重复编写逻辑相同的工具函数、遗留无人调用的废弃导出（Dead Exports）、生成毫无意义的透传包装函数（Pass-through Wrappers），以及引入未使用的幽灵依赖。
-
-`codebase-optimizer` 从 **AST（抽象语法树）** 底层同时解决这两个问题：**在输入端对上下文进行外科手术式的精准切片压缩，在输出端自动审计并清除代码库冗余。**
-
----
-
-## 核心功能模块
-
-### 第一阶段：上下文瘦身与 AST 切片引擎 (`optimizer/ast_engine.py`)
-* **仓库骨架全息图 (`get_repo_map`)：** 在 500 Token 以内生成整个代码库的层级符号索引（`文件 -> 类 -> 公共方法`），相比直接读取源文件可节省 **85% 以上** 的上下文开销。
-* **智能文件大纲提取 (`get_file_outline`)：** 剥离函数具体实现体，仅保留导入语句、装饰器、类继承关系、方法签名、类型注解、行号范围（`# L12-L48`）及单行文档字符串。
-* **传递依赖符号切片 (`get_symbol_slice`)：** 精准提取目标函数或类方法（支持 `ClassName.method`），并自动追踪提取其在同一文件内调用的所有局部辅助函数、常量及所需的顶部导入语句。
-* **Git Diff 降噪压缩 (`compress_git_diff`)：** 自动过滤 `package-lock.json`、`poetry.lock`、压缩产物等噪音文件，精简未改动上下文。
-
-### 第二阶段：反 AI 冗余代码与克隆审计 (`optimizer/slop_auditor.py`)
-* **AST 结构化克隆检测 (`find_duplicate_logic`)：** 对 AST 子树进行规范化归约（剥离变量名、参数名、注释及字面量常量）并计算 SHA-256 结构哈希。即使 AI 修改了变量名或注释，也能精准揪出跨文件的重复逻辑。
-* **跨文件死代码追踪图 (`find_dead_exports`)：** 构建全仓符号定义与引用关系图，精准定位从未被外部文件或内部逻辑调用的公共函数与类（自动豁免路由装饰器与 `@mcp.tool` 入口函数）。
-* **无效透传包装器检测 (`find_useless_wrappers`)：** 识别仅包含单条 `return` 语句且原样转发参数的空壳包装函数，消除 AI 过度抽象。
-
-### 第三至第五阶段路线图（推进中）
-* **运行时性能热点与复杂度扫描器：** 检测循环体内的同步/异步 I/O 调用、高认知复杂度嵌套函数以及可延迟加载的重型顶部导入。
-* **幽灵依赖清理与 0–100 健康度评分：** 交叉比对 `requirements.txt` / `pyproject.toml` 与实际 AST 导入，输出量化的**代码库健康评级（`A+` 至 `F`）**。
-
----
-
-## 快速开始 (Quickstart)
-
-### 1. 安装依赖
+### 1. Installation
 ```bash
 git clone git@github.com:KennethHelmuth/codebase-optimizer.git
 cd codebase-optimizer
 pip install -r requirements.txt
 ```
 
-### 2. Python API 调用示例
+### 2. Python API Usage
 ```python
-from optimizer import ASTSymbolEngine, SlopAuditor
+from optimizer import ASTSymbolEngine, SlopAuditor, HotspotScanner, HealthScorer
 
-# 1. 生成全仓极简符号骨架图（带 Token 压缩率统计）
+# 1. Generate compact repository skeleton map with token telemetry
 print(ASTSymbolEngine.get_repo_map("."))
 
-# 2. 提取单个函数及其文件内传递依赖切片
+# 2. Slice a target method and its transitive intra-file dependencies
 with open("optimizer/ast_engine.py") as f:
     code = f.read()
 print(ASTSymbolEngine.get_symbol_slice(code, "ASTSymbolEngine.get_symbol_slice"))
 
-# 3. 执行反 AI 冗余代码全量审计（AST 克隆 + 死代码 + 空壳包装函数）
-print(SlopAuditor.format_slop_report("."))
+# 3. Generate full 0-100 Codebase Health Scorecard
+print(HealthScorer.format_health_report("."))
 ```
 
-### 3. 启动 MCP 服务器
+### 3. Run MCP Server
 ```bash
 python mcp_server.py
 ```
 
 ---
 
-## 开源协议 (License)
+## License
 MIT License © Kenneth Helmuth
